@@ -1,0 +1,31 @@
+# Virtual environment / Виртуальное окружение
+venv/
+.venv/
+env/
+
+# Python cache / Кэш Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Jupyter / Jupyter
+.ipynb_checkpoints/
+
+# Large raw data files / Большие исходные данные
+data/raw/*.csv
+
+# IDE / Редакторы
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS / Системные файлы
+.DS_Store
+Thumbs.db
+
+# Distribution / Сборка
+dist/
+build/
+*.egg-info/
