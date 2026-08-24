@@ -1,6 +1,7 @@
 venv/
 data/
 notebooks/
+.env
 .git/
 __pycache__/
 pycache/

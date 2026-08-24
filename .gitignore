@@ -19,6 +19,9 @@ data/raw/*.csv
 .env
 .cursor/mcp.json
 
+# Логи бота / Bot logs
+logs/*.jsonl
+
 # IDE / Редакторы
 .idea/
 .vscode/

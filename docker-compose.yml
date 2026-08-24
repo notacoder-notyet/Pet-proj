@@ -1,0 +1,25 @@
+services:
+  api:
+    build: .
+    command: uvicorn src.api:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build: .
+    command: python -m src.bot
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      API_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      disable: true
