@@ -15,9 +15,14 @@ __pycache__/
 # Large raw data files / Большие исходные данные
 data/raw/*.csv
 
+# Secrets / Секреты
+.env
+.cursor/mcp.json
+
 # IDE / Редакторы
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 
