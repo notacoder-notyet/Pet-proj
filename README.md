@@ -18,7 +18,9 @@ ml-predictive-maintenance/
 ├── src/
 │   ├── predict.py    # инференс модели
 │   ├── api.py        # FastAPI
-│   └── bot.py        # Telegram-бот
+│   ├── bot.py        # Telegram-бот
+│   └── storage.py    # SQLite: входы, предсказания, репорты
+├── logs/             # app.db + telegram_dialogs.jsonl (локально, не в git)
 ├── models/
 │   └── best_model.pkl
 ├── Dockerfile
@@ -119,7 +121,18 @@ cp .env.example .env
 python -m src.bot
 ```
 
-В боте: `/start`, `/predict` (опрос по полям), `/demo`, или один JSON-сообщение с датчиками.
+В боте: `/start`, `/predict` (опрос по полям), `/demo`, `/report` (репорт об ошибке), или одно JSON-сообщение с показаниями.
+
+Данные и логи пишутся в каталог `logs/` (не в Telegram и не в git):
+
+| Файл | Что хранит |
+|---|---|
+| `logs/app.db` | SQLite: таблица `predictions` (вход датчиков + класс и вероятность), `error_reports` (`/report`), `events` (команды и ошибки), `last_context` (последняя ошибка для репорта) |
+| `logs/telegram_dialogs.jsonl` | тот же поток событий построчно, удобно смотреть через `grep` / `jq` |
+
+Для учебного проекта этого достаточно: SQLite — стандартная библиотека Python, файл можно открыть в DB Browser. Если позже понадобится несколько инстансов бота или аналитика — перенести те же таблицы в Postgres. Сырые CSV/модели лучше не класть в чат: токены и персональные данные остаются на диске.
+
+Чтобы получать копии репортов в свой Telegram, задайте в `.env` переменную `TELEGRAM_ADMIN_CHAT_ID` (числовой chat id). Без неё репорты остаются только в SQLite.
 
 ### 8. Docker (API + бот)
 

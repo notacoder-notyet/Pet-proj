@@ -18,6 +18,8 @@ services:
         required: false
     environment:
       API_URL: http://api:8000
+    volumes:
+      - ./logs:/app/logs
     depends_on:
       api:
         condition: service_healthy

@@ -21,6 +21,8 @@ data/raw/*.csv
 
 # Логи бота / Bot logs
 logs/*.jsonl
+logs/*.db
+logs/*.sqlite*
 
 # IDE / Редакторы
 .idea/

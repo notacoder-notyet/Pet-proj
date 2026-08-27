@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir --upgrade pip \
 COPY src/ ./src/
 COPY models/ ./models/
 
-RUN chown -R appuser:appuser /app
+RUN mkdir -p /app/logs && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8000

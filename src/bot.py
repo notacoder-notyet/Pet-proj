@@ -20,15 +20,16 @@ from telegram.ext import (
     filters,
 )
 
-from src.dialog_log import log_event
+from src.dialog_log import log_event, remember_error, save_error_report, save_prediction
 from src.predict import load_model, predict
 from src.schemas import SensorReading
 from src.sensor_sample import format_sample, random_sensor_sample
+from src.storage import DB_PATH, JSONL_PATH, init_db
 
 load_dotenv()
 
 # Состояния диалога / Conversation states
-TYPE, PRODUCT_ID, AIR, PROCESS, SPEED, TORQUE, WEAR = range(7)
+TYPE, PRODUCT_ID, AIR, PROCESS, SPEED, TORQUE, WEAR, REPORT = range(8)
 
 TYPE_KEYBOARD = ReplyKeyboardMarkup([["L", "M", "H"]], one_time_keyboard=True, resize_keyboard=True)
 
@@ -59,6 +60,7 @@ HELP_TEXT = (
     "Другие команды:\n"
     "/predict — те же поля, но по одному сообщению\n"
     "/demo — случайный правдоподобный пример и сразу расчёт\n"
+    "/report — отправить репорт об ошибке (приложится последняя ошибка, если была)\n"
     "/cancel — прервать пошаговый ввод"
 )
 
@@ -155,9 +157,11 @@ async def demo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Случайный правдоподобный набор (как в датасете AI4I):\n\n" + format_sample(sample))
     try:
         pred, prob = run_inference(sample)
+        save_prediction("demo", sample, pred, prob, update)
         log_event("demo_result", update, extra={"prediction": pred, "probability": prob, "sample": sample})
         await update.message.reply_text(_format_result(pred, prob))
     except Exception as exc:
+        remember_error(update, str(exc), sample)
         log_event("demo_error", update, extra={"error": str(exc), "sample": sample})
         await update.message.reply_text(_friendly_error(exc))
 
@@ -257,9 +261,11 @@ async def got_wear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Считаю вероятность отказа...")
     try:
         pred, prob = run_inference(raw)
+        save_prediction("dialog", raw, pred, prob, update)
         log_event("predict_result", update, extra={"input": raw, "prediction": pred, "probability": prob})
         await update.message.reply_text(_format_result(pred, prob))
     except Exception as exc:
+        remember_error(update, str(exc), raw)
         log_event("predict_error", update, extra={"input": raw, "error": str(exc)})
         await update.message.reply_text(_friendly_error(exc))
     context.user_data.clear()
@@ -267,9 +273,45 @@ async def got_wear(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    log_event("predict_cancel", update)
+    log_event("dialog_cancel", update)
     context.user_data.clear()
     await update.message.reply_text("Отменено.", reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
+
+
+async def report_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Начало репорта / Start error report."""
+    log_event("report_start", update)
+    await update.message.reply_text(
+        "Опишите ошибку одним сообщением (что делали и что пошло не так).\n"
+        "К репорту приложится последняя ошибка модели, если она была.\n"
+        "/cancel — отмена.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    return REPORT
+
+
+async def got_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Сохраняет репорт и опционально шлёт админу / Save report and optionally notify admin."""
+    text = (update.message.text or "").strip()
+    if not text:
+        await update.message.reply_text("Пустое сообщение. Напишите описание или /cancel.")
+        return REPORT
+    report_id = save_error_report(update, text)
+    log_event("error_report", update, extra={"report_id": report_id, "message": text})
+    admin = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "").strip()
+    if admin:
+        user = update.effective_user
+        username = f"@{user.username}" if user and user.username else "без username"
+        uid = user.id if user else "?"
+        try:
+            await context.bot.send_message(
+                chat_id=int(admin),
+                text=f"Репорт #{report_id} от {uid} ({username}):\n{text[:3500]}",
+            )
+        except Exception as exc:
+            log_event("admin_notify_error", update, extra={"error": str(exc)})
+    await update.message.reply_text(f"Репорт #{report_id} сохранён. Спасибо.")
     return ConversationHandler.END
 
 
@@ -277,18 +319,21 @@ async def json_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = (update.message.text or "").strip()
     if not text.startswith("{"):
         log_event("unknown_text", update)
-        await update.message.reply_text("Не понял сообщение. Команды: /help, /predict, /demo.")
+        await update.message.reply_text("Не понял сообщение. Команды: /help, /predict, /demo, /report.")
         return
     try:
         raw = json.loads(text)
         log_event("json_input", update, extra={"input": raw})
         pred, prob = run_inference(raw)
+        save_prediction("json", raw, pred, prob, update)
         log_event("json_result", update, extra={"input": raw, "prediction": pred, "probability": prob})
         await update.message.reply_text(_format_result(pred, prob))
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        remember_error(update, str(exc))
         log_event("json_parse_error", update)
         await update.message.reply_text("Не получилось прочитать JSON. Проверьте кавычки и запятые.")
     except Exception as exc:
+        remember_error(update, str(exc), raw if "raw" in locals() else None)
         log_event("json_error", update, extra={"error": str(exc)})
         await update.message.reply_text(_friendly_error(exc))
 
@@ -301,9 +346,13 @@ def main() -> None:
             "Set TELEGRAM_BOT_TOKEN in .env (BotFather -> /newbot)."
         )
 
+    init_db()
     app = Application.builder().token(token).build()
     conv = ConversationHandler(
-        entry_points=[CommandHandler("predict", predict_start)],
+        entry_points=[
+            CommandHandler("predict", predict_start),
+            CommandHandler("report", report_start),
+        ],
         states={
             TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_type)],
             PRODUCT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_product_id)],
@@ -312,8 +361,12 @@ def main() -> None:
             SPEED: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_speed)],
             TORQUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_torque)],
             WEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_wear)],
+            REPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, got_report)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CommandHandler("report", report_start),
+        ],
     )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
@@ -321,7 +374,7 @@ def main() -> None:
     app.add_handler(conv)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, json_message))
 
-    print("Telegram-бот запущен. Логи: logs/telegram_dialogs.jsonl")
+    print(f"Telegram-бот запущен. SQLite: {DB_PATH}  JSONL: {JSONL_PATH}")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
